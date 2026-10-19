@@ -49,7 +49,37 @@ The activities shell out to the `terraform` CLI in a per-environment workspace a
 | `SwapInstance` | `swapper.py` | `swap-<env>-<version>` |
 | `TeardownInstance` | `teardown.py`, rollback, TTL | `teardown-<env>`, `rollback-<env>-<ts>`, `teardown-ttl-<env>` |
 
+## Deploy targets
+
+The same workflows run against either of two targets. Each target has its own worker and task queue, so work started for one can never run on the other.
+
+| Target | What runs | Needs | Task queue | Workflow IDs |
+|---|---|---|---|---|
+| `aws` (default) | Real Terraform against real AWS | Terraform, AWS credentials, state bucket | `nonprod-provisioning` | as in the table above |
+| `sim` | Simulated activities: no Terraform, no AWS | Only Temporal | `nonprod-provisioning-sim` | same, with an `@sim` suffix (`deploy-<env>@sim`) |
+
+The `sim` activities register under the same names and return the same types as the real ones, so everything Temporal does is real: retries, saga rollback, approvals, TTL timers, and crash recovery from `kill -9`. Plans list the same resources as the Terraform modules, simulated state lives in `.sim_state/<env>/` (it survives a worker crash), and instance IPs come from the documentation range `198.51.100.0/24`. A full deploy takes about 20 seconds.
+
+```bash
+python worker.py --target sim          # terminal 1
+python starter.py demo-01 --target sim # terminal 2
+```
+
+Every CLI takes `--target`, defaulting to `$APEX_TARGET` (or `aws`); `./apex.sh` asks for one. You can run both workers side by side.
+
+Tune the simulation with environment variables on the **sim worker**:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `SIM_SPEED` | `1` | Multiplies every simulated delay; `0` is instant, `0.3` is snappy |
+| `SIM_HEALTH_FAILS` | `2` | Health-check attempts that fail ("still booting") before one passes |
+| `SIM_FAIL` | | Failures to inject, comma-separated. `compute:apply` fails every attempt (non-retryable, triggers rollback); `network:apply:flaky` fails the first two attempts, then succeeds. Modules: `network`, `compute`, `app`, or `health:check`; steps: `plan`, `apply`, `destroy`. |
+
+For example, `SIM_FAIL=compute:apply python worker.py --target sim` shows a rollback of a partly built compute module without touching AWS.
+
 ## Prerequisites
+
+For the `sim` target you only need Python and a Temporal server; skip the Terraform, AWS, and bucket steps below.
 
 - **Python 3.12+**
 - **Terraform 1.10+** (for S3 native state locking)
@@ -243,14 +273,16 @@ python teardown.py ephemeral-test-01   # second run: every module "skipped (stat
 
 | Command | Purpose |
 |---|---|
-| `./apex.sh` | Interactive menu for provision, swap, and teardown. Prints the command before running it. |
+| `./apex.sh` | Interactive menu for provision, swap, and teardown. Asks for a target unless `APEX_TARGET` is set. Prints the command before running it. |
 | `python starter.py [ENV] [--ttl SECONDS] [--fail-after-network] [--require-approval [--approval-timeout SECONDS]]` | Provision an environment (default `ephemeral-test-01`). With `--require-approval`, each module plan with changes waits for `approve.py` (default timeout 24h). |
 | `python approve.py ENV MODULE [--approve \| --reject] [--reason TEXT]` | Show a module's plan waiting for approval, and approve or reject it. |
 | `python swapper.py ENV VERSION` | Replace the instance with a new app version. |
 | `python teardown.py ENV` | Destroy an environment. Safe to re-run. |
 | `temporal workflow signal --workflow-id deploy-ENV --name extend_ttl --input SECONDS` | Push back a TTL teardown. `--name teardown_now` (no input) tears down immediately. |
-| `python check.py` | Preflight check of tools, AWS access, state bucket, and Temporal. |
-| `python worker.py` | Run the worker. Metrics at http://localhost:9090/metrics. |
+| `python check.py` | Preflight check of tools, AWS access, state bucket, and Temporal. With `--target sim`, only Temporal. |
+| `python worker.py [--target aws\|sim]` | Run the worker for one target. Metrics at http://localhost:9090/metrics (`aws`) or :9092 (`sim`). |
+
+Every `python` command above also takes `--target aws|sim` (default `$APEX_TARGET`, else `aws`). For `sim` workflows, add `@sim` to workflow IDs in `temporal` commands, e.g. `--workflow-id deploy-ENV@sim`.
 | `scripts/reset.sh ENV` | Break-glass cleanup that runs Terraform directly, without Temporal. |
 
 ## Tests
@@ -263,6 +295,7 @@ pytest
 The suite takes about 30 seconds and needs no AWS account, Terraform, or running Temporal server:
 
 - **Workflow tests** run the real workflows on a throwaway Temporal dev server, with the Terraform and HTTP activities swapped for in-memory mocks. They cover the TTL query and signals, cancelling during the TTL wait and mid-apply, failure rollback, swap, and approval (approve, reject, timeout, and re-approval when the plan changes before apply). Each test then replays its workflow histories against the current code to catch non-determinism. The dev server comes from the `temporal` CLI if it's on your PATH; otherwise the SDK downloads it on the first run.
+- **Sim tests** run the real workflows against the simulated activities on the `sim` task queue: deploy and idempotent teardown, an injected failure rolling back, a flaky step retrying, rejecting a plan, and swap.
 - **Activity tests** run the Terraform activities against a fake `terraform` script (`tests/bin/terraform`, bash, so macOS or Linux) and the health check against a local HTTP server. They cover error classification, re-planning on retry, plan summaries and comparing a re-plan with the approved plan, interrupting `terraform` on cancel, and health status codes.
 
 Run `pytest` before changing a workflow. If a replay check fails, the change would break workflows already running; see [versioning](https://docs.temporal.io/develop/python/versioning).
@@ -285,9 +318,11 @@ Run `pytest` before changing a workflow. If a replay check fails, the change wou
 │   └── teardown_instance.py      Destroy in reverse order, skipping empty state
 ├── activities/
 │   ├── terraform.py           terraform init/plan/apply/destroy/output via subprocess
-│   └── health.py              HTTP health check
+│   ├── health.py              HTTP health check
+│   └── sim.py                 Simulated versions of both, for the sim target
 ├── shared/
 │   ├── config.py              Settings loaded from .env
+│   ├── targets.py             Deploy targets: task queue and workflow ID per target
 │   └── idempotency.py         Deterministic per-activity idempotency key
 ├── terraform/modules/
 │   ├── network/               VPC, public subnet, IGW, route table, HTTP security group
@@ -299,6 +334,7 @@ Run `pytest` before changing a workflow. If a replay check fails, the change wou
 ├── tests/
 │   ├── conftest.py            Throwaway Temporal dev server shared by the workflow tests
 │   ├── test_workflows.py      Real workflows with mocked activities, plus replay checks
+│   ├── test_sim.py            Real workflows against the simulated activities
 │   ├── test_terraform_activities.py   Terraform activities against a fake terraform
 │   ├── test_health_activity.py        Health check against a local HTTP server
 │   └── bin/terraform          Fake terraform CLI used by the activity tests
@@ -313,11 +349,13 @@ Settings come from `.env` (see `.env.example`):
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TF_STATE_BUCKET` | *(required)* | S3 bucket for Terraform state |
+| `APEX_TARGET` | `aws` | Default target for the worker and CLIs: `aws` or `sim` |
+| `TF_STATE_BUCKET` | *(required for `aws`)* | S3 bucket for Terraform state |
 | `TF_STATE_REGION` | `us-east-1` | Region of the state bucket |
 | `TEMPORAL_ADDRESS` | `localhost:7233` | Temporal frontend |
 | `TEMPORAL_NAMESPACE` | `default` | Temporal namespace |
-| `TEMPORAL_TASK_QUEUE_NONPROD` | `nonprod-provisioning` | Task queue the worker polls |
+| `TEMPORAL_TASK_QUEUE_NONPROD` | `nonprod-provisioning` | Task queue for `aws`; other targets append `-<target>` |
+| `SIM_SPEED`, `SIM_HEALTH_FAILS`, `SIM_FAIL` | | Simulation knobs, read by the `sim` worker (see [Deploy targets](#deploy-targets)) |
 | `GRAFANA_PROM_*` | | Grafana Cloud remote write, only for the metrics profile |
 
 AWS resources are always created in **us-east-1**; the region is set in the Terraform modules.

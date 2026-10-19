@@ -6,7 +6,8 @@ from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError
 
 from approve import MODULES, format_plan, provision_workflow_id
-from shared.config import TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, TASK_QUEUE_NONPROD
+from shared.config import TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE
+from shared.targets import DEFAULT_TARGET, add_target_arg, task_queue, workflow_id
 from workflows.deploy_test_instance import DeployTestInstance
 from workflows.provision_module import DEFAULT_APPROVAL_TIMEOUT_SECONDS, ProvisionModule
 
@@ -33,13 +34,15 @@ async def print_url_when_healthy(handle: WorkflowHandle) -> None:
     print(f"  status:        temporal workflow query --workflow-id {handle.id} --name status")
 
 
-async def print_approval_requests(client: Client, env_name: str, poll_seconds: float = 2) -> None:
+async def print_approval_requests(
+    client: Client, env_name: str, poll_seconds: float = 2, target: str = DEFAULT_TARGET
+) -> None:
     """Print each module plan as it starts waiting for approval, with the
     commands to approve or reject it. Runs until cancelled."""
     seen: set[tuple[str, int]] = set()  # (module, approval round)
     while True:
         for module in MODULES:
-            handle = client.get_workflow_handle(provision_workflow_id(env_name, module))
+            handle = client.get_workflow_handle(provision_workflow_id(env_name, module, target))
             try:
                 # Skip closed runs (e.g. from an earlier deploy of this env).
                 if (await handle.describe()).status != WorkflowExecutionStatus.RUNNING:
@@ -52,8 +55,9 @@ async def print_approval_requests(client: Client, env_name: str, poll_seconds: f
                 continue
             seen.add(key)
             print(f"Approval needed:\n{format_plan(state)}")
-            print(f'  approve: python approve.py {env_name} {module} --approve --reason "..."')
-            print(f'  reject:  python approve.py {env_name} {module} --reject --reason "..."')
+            flag = "" if target == DEFAULT_TARGET else f" --target {target}"
+            print(f'  approve: python approve.py {env_name} {module}{flag} --approve --reason "..."')
+            print(f'  reject:  python approve.py {env_name} {module}{flag} --reject --reason "..."')
         await asyncio.sleep(poll_seconds)
 
 
@@ -63,9 +67,10 @@ async def main(
     fail_after_network: bool,
     require_approval: bool = False,
     approval_timeout: int = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
+    target: str = DEFAULT_TARGET,
 ):
     client = await Client.connect(TEMPORAL_ADDRESS, namespace=TEMPORAL_NAMESPACE)
-    workflow_id = f"deploy-{env_name}"
+    wf_id = workflow_id(target, "deploy", env_name)
     args = [env_name, ttl_seconds, True, fail_after_network]
     if require_approval:
         args += [True, approval_timeout]
@@ -73,18 +78,20 @@ async def main(
         handle = await client.start_workflow(
             DeployTestInstance.run,
             args=args,
-            id=workflow_id,
-            task_queue=TASK_QUEUE_NONPROD,
+            id=wf_id,
+            task_queue=task_queue(target),
         )
     except WorkflowAlreadyStartedError:
         print(
-            f"Workflow '{workflow_id}' is already running. "
+            f"Workflow '{wf_id}' is already running. "
             f"Wait for it to finish, tear down '{env_name}' first, or pick a different env name.",
             file=sys.stderr,
         )
         sys.exit(1)
     print(f"Started workflow: {handle.id}")
-    watcher = asyncio.create_task(print_approval_requests(client, env_name)) if require_approval else None
+    watcher = (
+        asyncio.create_task(print_approval_requests(client, env_name, target=target)) if require_approval else None
+    )
     try:
         if ttl_seconds > 0:
             await print_url_when_healthy(handle)
@@ -117,7 +124,10 @@ if __name__ == "__main__":
         "--approval-timeout", type=int, default=DEFAULT_APPROVAL_TIMEOUT_SECONDS, metavar="SECONDS",
         help="with --require-approval, fail and roll back if a plan isn't decided in time (default: 24h)",
     )
+    add_target_arg(parser)
     args = parser.parse_args()
     asyncio.run(
-        main(args.env, args.ttl, args.fail_after_network, args.require_approval, args.approval_timeout)
+        main(
+            args.env, args.ttl, args.fail_after_network, args.require_approval, args.approval_timeout, args.target
+        )
     )

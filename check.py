@@ -1,7 +1,9 @@
 """Preflight: verify local tools, AWS access, the state bucket, and Temporal.
 
-Run this before a demo: `python check.py`. Exits non-zero if anything is missing.
+Run this before a demo: `python check.py` (or `python check.py --target sim`,
+which only needs Temporal). Exits non-zero if anything is missing.
 """
+import argparse
 import asyncio
 import re
 import shutil
@@ -15,6 +17,7 @@ from shared.config import (
     TF_STATE_BUCKET,
     TF_STATE_REGION,
 )
+from shared.targets import add_target_arg, task_queue
 
 REPO_ROOT = Path(__file__).resolve().parent
 failures = 0
@@ -79,8 +82,13 @@ async def check_temporal() -> None:
 
 
 if __name__ == "__main__":
-    check_terraform()
-    check_modules()
-    check_aws()
+    parser = argparse.ArgumentParser(description="Check everything a demo needs.")
+    add_target_arg(parser)
+    target = parser.parse_args().target
+    print(f"target: {target} (task queue {task_queue(target)})")
+    if target == "aws":
+        check_terraform()
+        check_modules()
+        check_aws()
     asyncio.run(check_temporal())
     sys.exit(1 if failures else 0)

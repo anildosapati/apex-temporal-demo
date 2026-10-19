@@ -43,10 +43,6 @@ PERMANENT_ERRORS = {
     "AwsQuotaError": ("VpcLimitExceeded", "InstanceLimitExceeded", "VcpuLimitExceeded"),
 }
 
-if not TF_STATE_BUCKET:
-    raise RuntimeError("TF_STATE_BUCKET is not set; copy .env.example to .env and fill it in")
-
-
 @dataclass
 class PlanResult:
     module: str

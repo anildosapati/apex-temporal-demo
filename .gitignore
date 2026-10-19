@@ -10,3 +10,4 @@ terraform/**/.terraform.lock.hcl
 *.tfplan
 prometheus.yml
 .pytest_cache/
+.sim_state/

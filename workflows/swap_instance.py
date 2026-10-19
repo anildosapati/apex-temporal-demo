@@ -6,6 +6,7 @@ from temporalio.exceptions import ApplicationError
 with workflow.unsafe.imports_passed_through():
     from activities.health import http_health_check
     from activities.terraform import read_terraform_outputs
+    from shared.targets import target_for_queue, workflow_id
 
 from workflows.provision_module import ProvisionModule
 
@@ -59,7 +60,7 @@ class SwapInstance:
         new_compute = await workflow.execute_child_workflow(
             ProvisionModule.run,
             args=["compute", env_name, compute_inputs],
-            id=f"swap-compute-{env_name}-{new_app_version}",
+            id=workflow_id(target_for_queue(workflow.info().task_queue), "swap-compute", env_name, new_app_version),
         )
 
         new_ip = new_compute.get("public_ip")
