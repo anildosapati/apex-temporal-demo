@@ -47,10 +47,9 @@ ACTIVITIES = {
 }
 
 
-async def main(target: str):
+async def main(target: str, port: int):
     if target == "aws" and not TF_STATE_BUCKET:
         sys.exit("TF_STATE_BUCKET is not set; copy .env.example to .env and fill it in")
-    port = METRICS_PORTS[target]
     runtime = Runtime(
         telemetry=TelemetryConfig(
             metrics=PrometheusConfig(bind_address=f"0.0.0.0:{port}"),
@@ -76,4 +75,9 @@ if __name__ == "__main__":
         "--target", choices=TARGETS, default=os.getenv("APEX_TARGET", DEFAULT_TARGET),
         help="aws: real Terraform and AWS; sim: simulated, no AWS needed (default: $APEX_TARGET or aws)",
     )
-    asyncio.run(main(parser.parse_args().target))
+    parser.add_argument(
+        "--metrics-port", type=int, metavar="PORT",
+        help="Prometheus metrics port (default: 9090 for aws, 9092 for sim); set it to run a second worker",
+    )
+    args = parser.parse_args()
+    asyncio.run(main(args.target, args.metrics_port or METRICS_PORTS[args.target]))

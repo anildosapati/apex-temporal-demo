@@ -41,6 +41,8 @@ PERMANENT_ERRORS = {
     ),
     "StateBucketError": ("NoSuchBucket",),
     "AwsQuotaError": ("VpcLimitExceeded", "InstanceLimitExceeded", "VcpuLimitExceeded"),
+    # The app module's provisioner failed (e.g. the simulate_failure demo hook).
+    "AppDeployError": ("local-exec provisioner error",),
 }
 
 @dataclass

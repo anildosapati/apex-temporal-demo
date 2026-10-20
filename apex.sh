@@ -66,7 +66,7 @@ confirm_and_run() {
 # Env names starting with "chaos-" trigger the 30s kill -9 window in the
 # workflow, so they only appear under the Chaos variation.
 STANDARD_ENVS=("ephemeral-test-01" "ephemeral-test-02" "ephemeral-test-03")
-FAIL_ENVS=("fail-network-01" "fail-network-02")
+FAIL_ENVS=("fail-app-01" "fail-app-02")
 CHAOS_ENVS=("chaos-test-01" "chaos-test-02")
 
 # Target: $APEX_TARGET if set, otherwise ask. Every command gets --target, and
@@ -82,7 +82,7 @@ action="$(prompt_choice "What do you want to run?" "Provision" "Approve/Reject a
 
 case "$action" in
   Provision)
-    variation="$(prompt_choice "Variation:" "Standard" "Fail after network" "Chaos (kill -9 window)" "Require approval")"
+    variation="$(prompt_choice "Variation:" "Standard" "Fail app deploy" "Chaos (kill -9 window)" "Require approval")"
     case "$variation" in
       "Require approval")
         env="$(pick_env_name "${STANDARD_ENVS[@]}")"
@@ -92,9 +92,9 @@ case "$action" in
         env="$(pick_env_name "${CHAOS_ENVS[@]}")"
         args=("$env")
         ;;
-      "Fail after network")
+      "Fail app deploy")
         env="$(pick_env_name "${FAIL_ENVS[@]}")"
-        args=("$env" "--fail-after-network")
+        args=("$env" "--fail-app-deploy")
         ;;
       *)
         env="$(pick_env_name "${STANDARD_ENVS[@]}")"

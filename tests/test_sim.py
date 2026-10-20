@@ -37,7 +37,6 @@ def client(temporal_env) -> Client:
 def sim_env(tmp_path, monkeypatch):
     monkeypatch.setattr(sim, "STATE_DIR", tmp_path)
     monkeypatch.setenv("SIM_SPEED", "0")
-    monkeypatch.setenv("SIM_HEALTH_FAILS", "0")
     monkeypatch.delenv("SIM_FAIL", raising=False)
     return tmp_path
 
@@ -76,7 +75,6 @@ def test_target_helpers():
 
 
 async def test_deploy_then_teardown(client, worker, sim_env, monkeypatch):
-    monkeypatch.setenv("SIM_HEALTH_FAILS", "1")  # one failed health check, then healthy
     env = new_env("sim")
     result = await (await deploy(client, env)).result()
 
@@ -109,6 +107,21 @@ async def test_injected_failure_rolls_back(client, worker, sim_env, monkeypatch)
         DeployTestInstance.status
     )
     assert status["phase"] == "rolled-back"
+
+
+async def test_failed_app_deploy_rolls_back_network_and_compute(client, worker, sim_env):
+    env = new_env("sim-app")
+    handle = await client.start_workflow(
+        DeployTestInstance.run, args=[env, 0, True, True], id=targets.workflow_id("sim", "deploy", env), task_queue=TQ
+    )
+    with pytest.raises(WorkflowFailureError):
+        await handle.result()
+    app = await client.get_workflow_handle(f"provision-app-{env}@sim").describe()
+    assert app.status.name == "FAILED"
+    status = await handle.query(DeployTestInstance.status)
+    assert status["modules"] == ["network", "compute"]
+    assert status["phase"] == "rolled-back"
+    assert not list(sim_env.glob(f"{env}/*.json"))
 
 
 async def test_flaky_step_retries_then_succeeds(client, worker, monkeypatch):

@@ -64,14 +64,14 @@ async def print_approval_requests(
 async def main(
     env_name: str,
     ttl_seconds: int,
-    fail_after_network: bool,
+    fail_app_deploy: bool,
     require_approval: bool = False,
     approval_timeout: int = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
     target: str = DEFAULT_TARGET,
 ):
     client = await Client.connect(TEMPORAL_ADDRESS, namespace=TEMPORAL_NAMESPACE)
     wf_id = workflow_id(target, "deploy", env_name)
-    args = [env_name, ttl_seconds, True, fail_after_network]
+    args = [env_name, ttl_seconds, True, fail_app_deploy]
     if require_approval:
         args += [True, approval_timeout]
     try:
@@ -113,8 +113,8 @@ if __name__ == "__main__":
         help="tear the environment down automatically after this many seconds (default: keep it)",
     )
     parser.add_argument(
-        "--fail-after-network", action="store_true",
-        help="fail on purpose after the network module to demo saga rollback",
+        "--fail-app-deploy", action="store_true",
+        help="make the app module fail during apply, after network and compute are built, to demo saga rollback",
     )
     parser.add_argument(
         "--require-approval", action="store_true",
@@ -128,6 +128,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     asyncio.run(
         main(
-            args.env, args.ttl, args.fail_after_network, args.require_approval, args.approval_timeout, args.target
+            args.env, args.ttl, args.fail_app_deploy, args.require_approval, args.approval_timeout, args.target
         )
     )

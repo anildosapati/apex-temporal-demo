@@ -80,7 +80,7 @@ class DeployTestInstance:
         env_name: str,
         ttl_seconds: int = 0,
         rollback_on_failure: bool = True,
-        fail_after_network: bool = False,
+        fail_app_deploy: bool = False,
         require_approval: bool = False,
         approval_timeout_seconds: int = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
     ) -> dict:
@@ -100,8 +100,6 @@ class DeployTestInstance:
                 id=workflow_id(target, "provision", "network", env_name),
             )
             self._modules.append("network")
-            if fail_after_network:
-                raise RuntimeError("intentional demo failure after network")
 
             # Chaos hook: pause between network and compute so a `kill -9` window exists.
             if env_name.startswith("chaos-"):
@@ -126,11 +124,16 @@ class DeployTestInstance:
             )
             self._modules.append("compute")
 
-            # 3) App marker module (placeholder for future app deploy logic)
+            # 3) App marker module (placeholder for future app deploy logic).
+            # With fail_app_deploy, the app module's apply fails on purpose
+            # after network and compute are built, to demo the saga rollback.
             self._phase = "provisioning-app"
+            app_inputs = {"env_name": env_name, "app_version": "v1"}
+            if fail_app_deploy:
+                app_inputs["simulate_failure"] = "true"
             await workflow.execute_child_workflow(
                 ProvisionModule.run,
-                args=["app", env_name, {"env_name": env_name, "app_version": "v1"}, *approval_args],
+                args=["app", env_name, app_inputs, *approval_args],
                 id=workflow_id(target, "provision", "app", env_name),
             )
             self._modules.append("app")

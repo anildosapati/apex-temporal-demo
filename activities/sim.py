@@ -9,15 +9,26 @@ Simulated state lives in JSON files under .sim_state/<env>/<module>.json (saved
 plans next to them as <module>.tfplan), so it survives a worker `kill -9` the
 way S3 state does.
 
+Each module takes about 10 seconds (plan plus apply) and so does the health
+check, so every step is visible in a live demo.
+
 Knobs (worker environment):
   SIM_SPEED         multiplies every simulated delay (default 1; 0 = instant)
-  SIM_HEALTH_FAILS  health-check attempts that fail before one passes (default 2)
   SIM_FAIL          comma-separated failures to inject:
                       <module>:<step>        fails every attempt, non-retryable
                       <module>:<step>:flaky  fails the first 2 attempts, then passes
                     module is network, compute, app, or health; step is plan,
                     apply, or destroy (health only has `check`).
                     e.g. SIM_FAIL=compute:apply  or  SIM_FAIL=network:apply:flaky,health:check
+                    health:check:flaky is an instance slow to boot.
+
+The deploy's `fail_app_deploy` option needs no knob: it passes
+simulate_failure=true to the app module, which fails during apply here just
+as the real Terraform module's provisioner does.
+
+Failures can also be toggled while the worker runs: entries in
+.sim_state/faults (same format, one per line or comma-separated) are read on
+every attempt and added to SIM_FAIL. The demo UI writes this file.
 """
 import asyncio
 import hashlib
@@ -51,18 +62,35 @@ RESOURCES = {
     "app": ["null_resource.app_marker"],
 }
 
-# Simulated apply/destroy duration per module, in seconds (before SIM_SPEED).
-DURATIONS = {"network": 4, "compute": 6, "app": 2}
-PLAN_SECONDS = 1
+# Simulated durations in seconds (before SIM_SPEED). Plan plus apply is at
+# least 10s per module so each step stays on screen long enough to talk to.
+PLAN_SECONDS = 3
+APPLY_SECONDS = {"network": 8, "compute": 9, "app": 7}
+DESTROY_SECONDS = {"network": 4, "compute": 4, "app": 2}
+HEALTH_SECONDS = 10
+# The workflows give the health check 15s per attempt; stay inside that.
+HEALTH_MAX_SECONDS = 12
 
 
 def _speed() -> float:
     return float(os.getenv("SIM_SPEED", "1"))
 
 
+def fault_entries() -> list[str]:
+    """Active fault entries: SIM_FAIL plus the faults file."""
+    path = STATE_DIR / "faults"
+    spec = os.getenv("SIM_FAIL", "") + "," + (path.read_text().replace("\n", ",") if path.exists() else "")
+    return [e for e in (e.strip() for e in spec.split(",")) if e]
+
+
+def write_faults(entries: list[str]) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (STATE_DIR / "faults").write_text("\n".join(entries) + ("\n" if entries else ""))
+
+
 def _injected(module: str, step: str) -> str | None:
-    """'always', 'flaky', or None for this module/step, from SIM_FAIL."""
-    for entry in filter(None, (e.strip() for e in os.getenv("SIM_FAIL", "").split(","))):
+    """'always', 'flaky', or None for this module/step, from fault_entries()."""
+    for entry in fault_entries():
         parts = entry.split(":")
         if parts[:2] == [module, step]:
             return "flaky" if parts[2:] == ["flaky"] else "always"
@@ -86,9 +114,11 @@ def _maybe_fail(module: str, step: str) -> None:
         )
 
 
-async def _work(seconds: float, label: str) -> None:
+async def _work(seconds: float, label: str, max_seconds: float | None = None) -> None:
     """Sleep while heartbeating, like a long terraform command."""
     remaining = seconds * _speed()
+    if max_seconds is not None:
+        remaining = min(remaining, max_seconds)
     while remaining > 0:
         activity.heartbeat(label)
         step = min(1.0, remaining)
@@ -203,11 +233,18 @@ async def sim_apply(
 
     # Resources come into existence partway through, so an apply that fails
     # (or is killed) after the midpoint leaves state for the rollback to destroy.
-    half = DURATIONS[module] / 2
+    half = APPLY_SECONDS[module] / 2
     await _work(half, f"apply {module}")
     _write_state(module, env, {"attrs": desired, "outputs": _outputs(module, env, desired)})
     await _work(half, f"apply {module}")
     _maybe_fail(module, "apply")
+    if str(tf_vars.get("simulate_failure", "")).lower() == "true":
+        # Same message and type as the real module's local-exec failure.
+        raise ApplicationError(
+            "terraform apply failed: Error: local-exec provisioner error: Simulated app deploy failure",
+            type="AppDeployError",
+            non_retryable=True,
+        )
 
     Path(plan_path).unlink(missing_ok=True)
     return ApplyResult(module=module, env=env, outputs=_read_state(module, env)["outputs"])
@@ -223,7 +260,7 @@ async def sim_read_outputs(module: str, env: str) -> dict:
 async def sim_destroy(module: str, env: str, tf_vars: dict) -> None:
     if _read_state(module, env) is None:
         return  # nothing to destroy: same as terraform destroy on empty state
-    await _work(DURATIONS[module], f"destroy {module}")
+    await _work(DESTROY_SECONDS[module], f"destroy {module}")
     _maybe_fail(module, "destroy")
     _state_path(module, env).unlink(missing_ok=True)
     (STATE_DIR / env / f"{module}.tfplan").unlink(missing_ok=True)
@@ -235,11 +272,16 @@ async def sim_destroy(module: str, env: str, tf_vars: dict) -> None:
 
 @activity.defn(name="http_health_check")
 async def sim_health_check(url: str) -> HealthResult:
-    attempt = activity.info().attempt
-    _maybe_fail("health", "check")
     activity.logger.info(f"GET {url} (simulated)")
-    await _work(0.5, "health")
-    # Like an instance still booting: the first attempts can't connect.
-    if attempt <= int(os.getenv("SIM_HEALTH_FAILS", "2")):
-        raise RuntimeError(f"connect: {url} not reachable yet (simulated boot, attempt {attempt})")
+    await _work(HEALTH_SECONDS, "health", max_seconds=HEALTH_MAX_SECONDS)
+    mode = _injected("health", "check")
+    attempt = activity.info().attempt
+    if mode == "flaky" and attempt <= FLAKY_ATTEMPTS:
+        # An instance still booting: nginx isn't answering yet.
+        raise ApplicationError(
+            f"Instance still booting (simulated): {url} not answering yet, retrying "
+            f"(attempt {attempt} of {FLAKY_ATTEMPTS} that fail)",
+            type="InstanceBooting",
+        )
+    _maybe_fail("health", "check")
     return HealthResult(url=url, status_code=200)
