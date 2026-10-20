@@ -69,13 +69,14 @@ class SwapInstance:
 
         url = f"http://{new_ip}/"
         # Raises on a non-2xx response, so returning at all means healthy.
-        await workflow.execute_activity(
+        health = await workflow.execute_activity(
             http_health_check,
             args=[url],
             start_to_close_timeout=timedelta(seconds=15),
             schedule_to_close_timeout=timedelta(minutes=5),
             retry_policy=HEALTH_RETRY,
         )
+        url = health.url  # see DeployTestInstance: may resolve to a local port
 
         return {
             "env": env_name,

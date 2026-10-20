@@ -11,3 +11,4 @@ terraform/**/.terraform.lock.hcl
 prometheus.yml
 .pytest_cache/
 .sim_state/
+terraform/_workspaces_local/

@@ -55,7 +55,7 @@ def awaiting(module: str):
 
 async def test_config_and_worker(api):
     config = (await api.get("/api/config")).json()
-    assert config["targets"] == ["aws", "sim"]
+    assert config["targets"] == ["aws", "local", "sim"]
     assert config["task_queues"]["sim"] == TQ
     assert (await api.get("/api/gcp/envs")).status_code == 400
     # An option the server doesn't know is refused, not silently ignored.

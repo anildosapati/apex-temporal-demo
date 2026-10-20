@@ -253,6 +253,12 @@ const PHASE_TEXT = {
 };
 
 const state = { config: null, target: "sim", env: null, detail: null, envs: [] };
+const TARGET_LABEL = { aws: "AWS", local: "Local (Floci)", sim: "Simulated" };
+const TARGET_HINT = {
+  aws: "AWS deploys create a real VPC and t3.micro in us-east-1.",
+  local: "Real Terraform against Floci, a local AWS emulator: instances are Docker containers serving on localhost. Needs <code>docker compose --profile local up -d floci</code> and <code>python worker.py --target local</code>.",
+  sim: "The simulated target needs only Temporal: run <code>python worker.py --target sim</code>.",
+};
 const $ = (s) => document.querySelector(s);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -302,7 +308,7 @@ function clock(iso) { return iso ? new Date(iso).toLocaleTimeString([], { hour: 
 // ---- header ----
 function renderTargets() {
   setHTML($("#targets"), state.config.targets.map((t) =>
-    `<button type="button" data-target="${t}" aria-pressed="${t === state.target}">${t === "sim" ? "Simulated" : t.toUpperCase()}</button>`).join(""));
+    `<button type="button" data-target="${t}" aria-pressed="${t === state.target}">${TARGET_LABEL[t] || t}</button>`).join(""));
   $("#faults-card").hidden = state.target !== "sim";
   $("#tui").href = `${state.config.temporal_ui}/namespaces/${encodeURIComponent(state.config.namespace)}/workflows`;
 }
@@ -456,7 +462,7 @@ function renderDetail() {
   const root = $("#detail");
   if (!state.env) {
     setHTML(root, `<div class="card empty"><b>Pick an environment or start a deploy</b>
-      ${state.target === "sim" ? "The simulated target needs only Temporal: run <code>python worker.py --target sim</code>." : "AWS deploys create a real VPC and t3.micro in us-east-1."}</div>`);
+      ${TARGET_HINT[state.target] || ""}</div>`);
     return;
   }
   const d = state.detail;
@@ -507,7 +513,7 @@ function renderDetail() {
 
   const ttl = d.expires_at && d.phase === "ttl-wait";
   setHTML($("#sec-instance"), `<h2>Instance</h2><dl class="kv">
-      <dt>URL</dt><dd>${d.url && teardownState(d) !== "done" ? (d.target === "aws" ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.url)}</a>` : `<span class="mono">${esc(d.url)}</span> <span class="hint">(simulated)</span>`) : "—"}</dd>
+      <dt>URL</dt><dd>${d.url && teardownState(d) !== "done" ? urlView(d) : "—"}</dd>
       <dt>Built</dt><dd>${teardownState(d) === "done" ? "nothing left: torn down" : esc(d.built.join(", ") || "—")}</dd>
       <dt>Teardown</dt><dd>${ttl ? `in <span class="countdown" data-expires="${esc(d.expires_at)}"></span> <span class="hint">at ${esc(clock(d.expires_at))}</span>` : d.phase === "torn-down" ? "done (TTL)" : "manual"}</dd>
     </dl>
@@ -525,6 +531,13 @@ function renderDetail() {
   setHTML($("#sec-timeline"), d.related.length ? `<table class="timeline"><tbody>${d.related.map((r) =>
     `<tr><td class="when">${esc(clock(r.started))}</td><td><span class="mono">${esc(r.workflow_id)}</span><br><span class="hint">${esc(r.type)}</span></td>
       <td><span class="badge ${esc(r.status)}">${esc(r.status)}</span></td><td>${wfLink(r.workflow_id, "↗")}</td></tr>`).join("")}</tbody></table>` : `<p class="hint">None yet.</p>`);
+}
+
+function urlView(d) {
+  if (d.target === "sim") return `<span class="mono">${esc(d.url)}</span> <span class="hint">(simulated)</span>`;
+  // Local instances are named until the health check finds Floci's port forward.
+  if (d.url.includes(".floci.localhost")) return `<span class="mono">${esc(d.url)}</span> <span class="hint">(finding Floci's forwarded port…)</span>`;
+  return `<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.url)}</a>`;
 }
 
 function tick() {

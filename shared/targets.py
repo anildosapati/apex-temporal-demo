@@ -2,6 +2,8 @@
 work started for one target can never run against another.
 
 - aws: real Terraform against real AWS (the original demo).
+- local: real Terraform against Floci, a local AWS emulator in Docker. EC2
+  instances are containers, so nginx really serves the page on localhost.
 - sim: no Terraform, no AWS. Simulated activities with the same names and
   return types, so every workflow behaves exactly as it does against AWS.
 
@@ -12,12 +14,12 @@ import os
 
 from shared.config import TASK_QUEUE_NONPROD
 
-TARGETS = ("aws", "sim")
+TARGETS = ("aws", "local", "sim")
 DEFAULT_TARGET = "aws"
 
 # Each worker serves Prometheus metrics on its own port, so workers for
 # different targets can run side by side.
-METRICS_PORTS = {"aws": 9090, "sim": 9092}
+METRICS_PORTS = {"aws": 9090, "local": 9093, "sim": 9092}
 
 
 def task_queue(target: str) -> str:
@@ -46,5 +48,5 @@ def add_target_arg(parser) -> None:
     """The --target flag every CLI shares, defaulting to $APEX_TARGET."""
     parser.add_argument(
         "--target", choices=TARGETS, default=os.getenv("APEX_TARGET", DEFAULT_TARGET),
-        help="which worker runs it: aws (real AWS) or sim (simulated) (default: $APEX_TARGET or aws)",
+        help="which worker runs it: aws (real AWS), local (Floci), or sim (simulated) (default: $APEX_TARGET or aws)",
     )

@@ -73,7 +73,7 @@ CHAOS_ENVS=("chaos-test-01" "chaos-test-02")
 # the worker for that target must be running (python worker.py --target ...).
 target="${APEX_TARGET:-}"
 if [[ -z "$target" ]]; then
-  target="$(prompt_choice "Target:" "aws" "sim")"
+  target="$(prompt_choice "Target:" "aws" "local" "sim")"
 fi
 echo "Target: $target" >&2
 T=(--target "$target")

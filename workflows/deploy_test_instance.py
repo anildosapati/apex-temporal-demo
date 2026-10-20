@@ -147,13 +147,16 @@ class DeployTestInstance:
             url = f"http://{public_ip}/"
             self._phase = "health-check"
             self._url = url
-            await workflow.execute_activity(
+            health = await workflow.execute_activity(
                 http_health_check,
                 args=[url],
                 start_to_close_timeout=timedelta(seconds=15),
                 schedule_to_close_timeout=timedelta(minutes=5),
                 retry_policy=HEALTH_RETRY,
             )
+            # The URL that answered: the same one on AWS, but on the local
+            # target the instance name resolves to a forwarded localhost port.
+            url = self._url = health.url
             self._phase = "healthy"
 
             result = {
