@@ -149,6 +149,13 @@ async def _run(
 def _tf_error(step: str, stderr: str) -> ApplicationError:
     """Turn a failed terraform command into a typed, correctly retryable error."""
     message = f"terraform {step} failed: {stderr.strip()}"
+    if _target == "local" and FLOCI_ENDPOINT.split("//")[-1] in stderr and "request send failed" in stderr:
+        # Still retryable: Floci may just be restarting.
+        message = (
+            f"Floci isn't responding at {FLOCI_ENDPOINT}; check `docker logs apex-floci` "
+            f"(restart it with `docker restart apex-floci` if it's stuck starting). {message}"
+        )
+        return ApplicationError(message, type="FlociUnavailable")
     for error_type, fragments in PERMANENT_ERRORS.items():
         if any(f in stderr for f in fragments):
             return ApplicationError(message, type=error_type, non_retryable=True)

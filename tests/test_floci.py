@@ -56,6 +56,14 @@ def test_aws_target_is_unchanged(tmp_path, monkeypatch):
     assert "-backend-config=bucket=real-bucket" in tf._backend_args("compute", "e1")
 
 
+def test_floci_connection_errors_name_floci(local_tf):
+    stderr = ('Error: Failed to get existing workspaces: ... request send failed, '
+              'Get "http://floci.test:4599/apex-local-state?list-type=2": read: connection reset by peer')
+    err = tf._tf_error("init", stderr)
+    assert err.type == "FlociUnavailable" and not err.non_retryable
+    assert "docker logs apex-floci" in err.message
+
+
 def test_use_target_rejects_sim():
     with pytest.raises(ValueError):
         tf.use_target("sim")
