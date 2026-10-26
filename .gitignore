@@ -17,3 +17,4 @@ terraform/_workspaces_local/
 *.sqlite
 *.sqlite-*
 .DS_Store
+scripts/steps.md
